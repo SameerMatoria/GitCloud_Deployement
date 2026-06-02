@@ -40,7 +40,7 @@ After you authorize, GitHub provides GitCloud with an access token scoped to the
     id: 'what-we-do',
     title: 'What GitCloud Does',
     list: [
-      'Lists your repositories and their contents via the GitHub API',
+      'Lists your repositories and their contents via the GitHub API ',
       'Uploads files by creating commits in your repositories',
       'Splits large files (over 20 MB) into chunks and stores a manifest file for reassembly on download',
       'Auto-creates overflow repositories when a repo nears its storage limit (these are hidden from your dashboard but visible on GitHub)',

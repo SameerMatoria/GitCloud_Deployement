@@ -95,6 +95,19 @@ const githubUsers = {
   },
 };
 
+// Durable user registry — records a user on first login and updates
+// activity on every login. NEVER deleted on logout, so it is the
+// source of truth for total user count and retention metrics.
+const recordUserLogin = (userId, username) => {
+  db.prepare(`
+    INSERT INTO users (userId, username) VALUES (?, ?)
+    ON CONFLICT(userId) DO UPDATE SET
+      lastSeenAt = datetime('now'),
+      loginCount = loginCount + 1,
+      username   = excluded.username
+  `).run(String(userId), username);
+};
+
 // Initialize AuthSnap with GitHub provider
 const auth = new AuthSnap({
   providers: {
@@ -117,6 +130,7 @@ const auth = new AuthSnap({
       // Store the raw GitHub access token for GitHub API calls
       // AuthSnap returns camelCase: tokens.accessToken (not access_token)
       githubUsers.set(user.id, { token: tokens.accessToken, username: user.raw.login });
+      recordUserLogin(user.id, user.raw.login || String(user.id));
       console.log('GitHub OAuth Success. User:', user.raw.login || user.id);
       return { redirect: `${FRONTEND_URL}/dashboard` };
     },
@@ -1159,6 +1173,56 @@ app.delete('/api/share/:id', auth.protect(), (req, res) => {
 
   db.prepare('DELETE FROM shares WHERE shareId = ?').run(req.params.id);
   res.json({ message: 'Share link revoked' });
+});
+
+// ── Admin: User Stats ───────────────────────────────────────────
+// Total user count + activity/retention metrics from the durable `users` table.
+// Restricted to the GitHub username(s) in ADMIN_GITHUB_USERNAMES (comma-separated).
+const ADMIN_USERNAMES = (process.env.ADMIN_GITHUB_USERNAMES || '')
+  .split(',')
+  .map((s) => s.trim().toLowerCase())
+  .filter(Boolean);
+
+app.get('/api/admin/stats', auth.protect(), (req, res) => {
+  const gh = requireGitHub(req, res);
+  if (!gh) return;
+
+  // Gate: only configured admins. If no admins configured, deny by default.
+  if (!ADMIN_USERNAMES.includes((gh.username || '').toLowerCase())) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
+  const totalUsers = db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
+  const activeLast7d = db.prepare(
+    "SELECT COUNT(*) AS c FROM users WHERE lastSeenAt >= datetime('now', '-7 days')"
+  ).get().c;
+  const activeLast30d = db.prepare(
+    "SELECT COUNT(*) AS c FROM users WHERE lastSeenAt >= datetime('now', '-30 days')"
+  ).get().c;
+  const newLast7d = db.prepare(
+    "SELECT COUNT(*) AS c FROM users WHERE firstSeenAt >= datetime('now', '-7 days')"
+  ).get().c;
+  const newLast30d = db.prepare(
+    "SELECT COUNT(*) AS c FROM users WHERE firstSeenAt >= datetime('now', '-30 days')"
+  ).get().c;
+  const signupsByDay = db.prepare(`
+    SELECT substr(firstSeenAt, 1, 10) AS day, COUNT(*) AS count
+    FROM users
+    WHERE firstSeenAt >= datetime('now', '-30 days')
+    GROUP BY day ORDER BY day DESC
+  `).all();
+  const recentUsers = db.prepare(`
+    SELECT username, firstSeenAt, lastSeenAt, loginCount
+    FROM users ORDER BY lastSeenAt DESC LIMIT 25
+  `).all();
+
+  res.json({
+    totalUsers,
+    active: { last7Days: activeLast7d, last30Days: activeLast30d },
+    newUsers: { last7Days: newLast7d, last30Days: newLast30d },
+    signupsByDay,
+    recentUsers,
+  });
 });
 
 // ── Health Check ────────────────────────────────────────────────

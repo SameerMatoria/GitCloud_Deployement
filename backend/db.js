@@ -59,4 +59,19 @@ db.exec(`
 
 db.exec(`CREATE INDEX IF NOT EXISTS idx_repo_groups_primary ON repo_groups(username, primaryRepo)`);
 
+// Durable user registry: one row per GitHub user, ever.
+// Unlike github_tokens (a session store cleared on logout), this is NEVER
+// deleted — it is the source of truth for total user count and activity.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    userId TEXT PRIMARY KEY,
+    username TEXT NOT NULL,
+    firstSeenAt TEXT NOT NULL DEFAULT (datetime('now')),
+    lastSeenAt  TEXT NOT NULL DEFAULT (datetime('now')),
+    loginCount  INTEGER NOT NULL DEFAULT 1
+  )
+`);
+
+db.exec(`CREATE INDEX IF NOT EXISTS idx_users_lastSeen ON users(lastSeenAt)`);
+
 export default db;
